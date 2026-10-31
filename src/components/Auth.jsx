@@ -6,9 +6,10 @@ import { Mail, LockKeyhole, UserRound } from "lucide-react";
 import logo from "../assets/logo.jpeg";
 
 // API URL from environment variable
+// API URL from environment variable
 const API_URL = (
-  import.meta.env.VITE_API_URL || "http://localhost:5000/api"
-).replace(/\/+$/, "");
+  import.meta.env.VITE_API_URL || "http://localhost:5000"
+).replace(/\/+$/, "") + "/api";
 
 export default function Auth({ onAuthSuccess }) {
   const [mode, setMode] = useState("login");
