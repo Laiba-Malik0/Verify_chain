@@ -1,6 +1,6 @@
-
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
+
 import {
   Search,
   Plus,
@@ -55,7 +55,9 @@ async function apiRequest(path, options = {}) {
   const response = await fetch(`${API_URL}${path}`, {
     ...options,
     headers: {
-      "Content-Type": "application/json",
+      ...(options.body instanceof FormData
+        ? {}
+        : { "Content-Type": "application/json" }),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...options.headers
     }
@@ -67,6 +69,23 @@ async function apiRequest(path, options = {}) {
     throw new Error(
       data.message || "Request failed. Please try again."
     );
+  }
+
+  return data;
+}
+
+// Product data + device image ko FormData mein convert karta hai.
+function createProductFormData(form) {
+  const data = new FormData();
+
+  data.append("brand_id", form.brand_id);
+  data.append("product_name", form.product_name);
+  data.append("product_code", form.product_code);
+  data.append("category", form.category || "");
+  data.append("description", form.description || "");
+
+  if (form.image) {
+    data.append("image", form.image);
   }
 
   return data;
@@ -194,13 +213,7 @@ export default function ProductCatalog() {
           `/api/products/${selected.product_id}`,
           {
             method: "PUT",
-            body: JSON.stringify({
-              brand_id: form.brand_id,
-              product_name: form.product_name,
-              product_code: form.product_code,
-              category: form.category,
-              description: form.description
-            })
+            body: createProductFormData(form)
           }
         );
 
@@ -219,13 +232,7 @@ export default function ProductCatalog() {
       if (!productId) {
         const result = await apiRequest("/api/products", {
           method: "POST",
-          body: JSON.stringify({
-            brand_id: form.brand_id,
-            product_name: form.product_name,
-            product_code: form.product_code,
-            category: form.category,
-            description: form.description
-          })
+          body: createProductFormData(form)
         });
 
         productId = Number(result.product_id);
@@ -607,8 +614,18 @@ export default function ProductCatalog() {
                     >
                       <td className="px-5 py-4">
                         <div className="flex items-center gap-3">
-                          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#edf3e9] text-[#55755b]">
-                            <Package size={19} />
+
+                          {/* Product image thumbnail */}
+                          <span className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-[#edf3e9] text-[#55755b]">
+                            {p.image_url ? (
+                              <img
+                                src={p.image_url}
+                                alt={p.product_name}
+                                className="h-full w-full object-cover"
+                              />
+                            ) : (
+                              <Package size={19} />
+                            )}
                           </span>
 
                           <div>
@@ -782,6 +799,17 @@ export default function ProductCatalog() {
             }}
           >
             <div className="space-y-4">
+
+              {/* Product image */}
+              {selected.image_url && (
+                <div className="flex justify-center rounded-xl border border-[#e8ece3] bg-white p-3">
+                  <img
+                    src={selected.image_url}
+                    alt={selected.product_name}
+                    className="max-h-56 w-full rounded-lg object-contain"
+                  />
+                </div>
+              )}
 
               {/* Product information */}
               {[

@@ -16,7 +16,7 @@ const navItems = [
   { id: "Dashboard", label: "Dashboard", icon: LayoutDashboard },
   { id: "Product Catalog", label: "Product Catalog", icon: Package },
   { id: "Supply Chain", label: "Supply Chain", icon: Truck },
-  { id: "QR Reports", label: "QR Code Reports", icon: FileSearch },
+  { id: "QR Reports", label: "Reports", icon: FileSearch },
 ];
 
 export default function Sidebar({ user, page, setPage, logout }) {

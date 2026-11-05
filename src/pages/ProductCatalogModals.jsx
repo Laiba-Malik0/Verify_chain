@@ -1,4 +1,3 @@
-
 import React, { useState } from "react";
 import { motion } from "framer-motion";
 import { X } from "lucide-react";
@@ -104,6 +103,41 @@ export function ProductForm({
   const [form, setForm] = useState(() => ({ ...initial }));
   const [error, setError] = useState("");
 
+  // Product image states
+  const [imageFile, setImageFile] = useState(null);
+  const [imagePreview, setImagePreview] = useState(
+    initial.image_url || ""
+  );
+
+  // Device se image select karna
+  function handleImageChange(e) {
+    const file = e.target.files?.[0];
+
+    if (!file) return;
+
+    const allowedTypes = [
+      "image/jpeg",
+      "image/png",
+      "image/webp"
+    ];
+
+    if (!allowedTypes.includes(file.type)) {
+      setError("Only JPG, PNG and WEBP images are allowed.");
+      e.target.value = "";
+      return;
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      setError("Image size must be less than 5 MB.");
+      e.target.value = "";
+      return;
+    }
+
+    setImageFile(file);
+    setImagePreview(URL.createObjectURL(file));
+    setError("");
+  }
+
   const update = (key, value) => {
     setForm((prev) => ({
       ...prev,
@@ -177,7 +211,10 @@ export function ProductForm({
         batch_number: form.batch_number.trim(),
         manufactured_qty: Number(form.manufactured_qty),
         manufacture_date: form.manufacture_date,
-        scratch_quantity: Number(form.scratch_quantity)
+        scratch_quantity: Number(form.scratch_quantity),
+
+        // Selected device image
+        image: imageFile
       });
     } catch (err) {
       setError(err.message || "Product save nahi ho saka.");
@@ -282,6 +319,36 @@ export function ProductForm({
             }
             placeholder="Enter product details..."
           />
+        </Field>
+
+        {/* Product image upload */}
+        <Field label="Product image">
+          <input
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+            onChange={handleImageChange}
+            className={inputClass}
+          />
+
+          <p className="mt-1 text-xs text-[#879184]">
+            Upload JPG, PNG or WEBP. Maximum size: 5 MB.
+          </p>
+
+          {imagePreview && (
+            <div className="mt-3 flex items-center gap-3 rounded-xl border border-[#e3e9de] bg-white p-3">
+              <img
+                src={imagePreview}
+                alt="Product preview"
+                className="h-20 w-20 rounded-lg object-cover"
+              />
+
+              <span className="text-xs text-[#697668]">
+                {imageFile
+                  ? imageFile.name
+                  : "Current product image"}
+              </span>
+            </div>
+          )}
         </Field>
       </div>
 

@@ -1,17 +1,33 @@
-
 import { useEffect, useState, useCallback } from "react";
+import { motion } from "framer-motion";
 import {
   ShieldCheck,
   Search,
-  PackageCheck,
-  AlertTriangle,
-  History,
   ScanLine,
-  Info,
-  Send,
   FileWarning,
+  Send,
+  History,
+  ClipboardList,
+  RefreshCw,
   CheckCircle2,
+  X,
 } from "lucide-react";
+
+import {
+  fadeUp,
+  staggerContainer,
+  PageSection,
+  SectionHeading,
+  StatCard,
+  FormField,
+  TextareaField,
+  VerificationResultCard,
+  EmptyState,
+  ReportCard,
+  HistoryItem,
+  HowItWorks,
+  InfoNote,
+} from "./CustomerPortalComponents";
 
 const API_URL = (
   import.meta.env.VITE_API_URL || "http://localhost:5000"
@@ -22,6 +38,7 @@ function getToken() {
     const user = JSON.parse(
       localStorage.getItem("verifychain_user") || "null"
     );
+
     return user?.token || "";
   } catch {
     return "";
@@ -48,10 +65,7 @@ async function apiRequest(endpoint, options = {}) {
 
   if (!response.ok || data.success === false) {
     throw new Error(
-      data.message ||
-        (response.status === 403
-          ? "Please log in with a customer account."
-          : "Request failed. Please try again.")
+      data.message || "Request failed. Please try again."
     );
   }
 
@@ -69,12 +83,15 @@ function formatDate(value) {
 }
 
 function mapHistoryItem(item) {
-  const result = item.verification_result;
-
   let type = "notfound";
 
-  if (result === "registered") type = "registered";
-  if (result === "already_verified") type = "already_verified";
+  if (item.verification_result === "registered") {
+    type = "registered";
+  }
+
+  if (item.verification_result === "already_verified") {
+    type = "already_verified";
+  }
 
   return {
     id: item.verification_id,
@@ -86,27 +103,64 @@ function mapHistoryItem(item) {
   };
 }
 
+function extractField(description, field) {
+  const regex = new RegExp(
+    `(?:^|\\n\\n)${field}:\\s*([\\s\\S]*?)(?=\\n\\n|$)`,
+    "i"
+  );
+
+  return description?.match(regex)?.[1]?.trim() || "";
+}
+
+function parseReport(report) {
+  const description = report.report_description || "";
+
+  const cleanDescription = description
+    .replace(/(?:^|\n\n)Product name:[\s\S]*?(?=\n\n|$)/i, "")
+    .replace(/(?:^|\n\n)Seller\/shop:[\s\S]*?(?=\n\n|$)/i, "")
+    .replace(/(?:^|\n\n)Purchase location:[\s\S]*?(?=\n\n|$)/i, "")
+    .trim();
+
+  return {
+    productName:
+      report.product_name ||
+      extractField(description, "Product name"),
+    code: report.scratch_code || "",
+    seller: extractField(description, "Seller/shop"),
+    location: extractField(description, "Purchase location"),
+    description: cleanDescription,
+  };
+}
+
+const emptyReport = {
+  productName: "",
+  code: "",
+  seller: "",
+  location: "",
+  description: "",
+};
+
 export default function CustomerPortal() {
   const [code, setCode] = useState("");
   const [result, setResult] = useState(null);
+
   const [history, setHistory] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(true);
   const [historyError, setHistoryError] = useState("");
   const [verifyLoading, setVerifyLoading] = useState(false);
 
-  const [showReport, setShowReport] = useState(false);
+  // Report form
+  const [report, setReport] = useState(emptyReport);
   const [reportLoading, setReportLoading] = useState(false);
-
-  const [report, setReport] = useState({
-    productName: "",
-    code: "",
-    seller: "",
-    location: "",
-    description: "",
-  });
-
   const [reportMessage, setReportMessage] = useState("");
   const [reportError, setReportError] = useState("");
+  const [editingId, setEditingId] = useState(null);
+
+  // My Reports
+  const [reports, setReports] = useState([]);
+  const [reportsLoading, setReportsLoading] = useState(true);
+  const [reportsError, setReportsError] = useState("");
+  const [actionLoading, setActionLoading] = useState(false);
 
   const loadHistory = useCallback(async () => {
     setHistoryLoading(true);
@@ -116,26 +170,37 @@ export default function CustomerPortal() {
       const data = await apiRequest("/customer/history");
       setHistory((data.history || []).map(mapHistoryItem));
     } catch (error) {
-      setHistoryError(
-        error.message || "Could not load verification history."
-      );
+      setHistoryError(error.message);
     } finally {
       setHistoryLoading(false);
     }
   }, []);
 
+  const loadReports = useCallback(async () => {
+    setReportsLoading(true);
+    setReportsError("");
+
+    try {
+      const data = await apiRequest("/customer/reports");
+      setReports(data.reports || []);
+    } catch (error) {
+      setReportsError(error.message);
+    } finally {
+      setReportsLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     loadHistory();
-  }, [loadHistory]);
+    loadReports();
+  }, [loadHistory, loadReports]);
 
+  // Product verification
   async function verifyProduct(e) {
     e.preventDefault();
 
     const enteredCode = code.trim();
 
-    setShowReport(false);
-    setReportMessage("");
-    setReportError("");
     setResult(null);
 
     if (!enteredCode) {
@@ -143,7 +208,8 @@ export default function CustomerPortal() {
         type: "notfound",
         name: "Enter a product code",
         batch: "-",
-        message: "Please enter the code printed on the product packaging.",
+        productCode: "",
+        message: "Please enter the code printed on the packaging.",
       });
       return;
     }
@@ -153,10 +219,13 @@ export default function CustomerPortal() {
     try {
       const data = await apiRequest("/verification", {
         method: "POST",
-        body: JSON.stringify({ scratch_code: enteredCode }),
+        body: JSON.stringify({
+          scratch_code: enteredCode,
+        }),
       });
 
       const product = data.product || {};
+
       let verification;
 
       if (data.result === "registered") {
@@ -177,7 +246,7 @@ export default function CustomerPortal() {
           productCode: product.product_code || enteredCode,
           message:
             data.message ||
-            "This scratch code has already been used for verification. Check the product carefully.",
+            "This scratch code has already been used. Check the product carefully.",
         };
       } else {
         verification = {
@@ -187,20 +256,21 @@ export default function CustomerPortal() {
           productCode: enteredCode,
           message:
             data.message ||
-            "This code was not found in the VerifyChain registry. Check the code or submit a report.",
+            "This code was not found in the VerifyChain registry.",
         };
       }
 
       setResult(verification);
 
-      setReport({
+      // Automatically fill report form if product details are available
+      setReport((previous) => ({
+        ...previous,
         productName:
-          verification.type !== "notfound" ? verification.name : "",
+          verification.type !== "notfound"
+            ? verification.name
+            : previous.productName,
         code: enteredCode,
-        seller: "",
-        location: "",
-        description: "",
-      });
+      }));
 
       await loadHistory();
     } catch (error) {
@@ -209,32 +279,28 @@ export default function CustomerPortal() {
         name: "Verification Failed",
         batch: "-",
         productCode: enteredCode,
-        message:
-          error.message ||
-          "Could not connect to the server. Please try again.",
+        message: error.message,
       });
     } finally {
       setVerifyLoading(false);
     }
   }
 
+  // Submit or update report
   async function submitReport(e) {
     e.preventDefault();
+
     setReportMessage("");
     setReportError("");
 
-    if (!report.code.trim()) {
-      setReportError("Product code is required.");
-      return;
-    }
-
     if (
       !report.description.trim() &&
+      !report.productName.trim() &&
       !report.seller.trim() &&
       !report.location.trim()
     ) {
       setReportError(
-        "Please provide additional details, seller information, or purchase location."
+        "Please provide some details about your product issue."
       );
       return;
     }
@@ -242,104 +308,193 @@ export default function CustomerPortal() {
     setReportLoading(true);
 
     try {
-      const data = await apiRequest("/customer/reports", {
-        method: "POST",
-        body: JSON.stringify({
-          product_name: report.productName.trim(),
-          scratch_code: report.code.trim(),
-          seller: report.seller.trim(),
-          location: report.location.trim(),
-          description: report.description.trim(),
-        }),
+      const payload = {
+        product_name: report.productName,
+        scratch_code: report.code,
+        seller: report.seller,
+        location: report.location,
+        description: report.description,
+      };
+
+      const endpoint = editingId
+        ? `/customer/reports/${editingId}`
+        : "/customer/reports";
+
+      const data = await apiRequest(endpoint, {
+        method: editingId ? "PUT" : "POST",
+        body: JSON.stringify(payload),
       });
 
       setReportMessage(
-        data.message || "Your report was submitted successfully."
+        data.message ||
+          (editingId
+            ? "Report updated successfully."
+            : "Report submitted successfully.")
       );
 
-      setShowReport(false);
+      setReport(emptyReport);
+      setEditingId(null);
 
-      setReport({
-        productName: "",
-        code: "",
-        seller: "",
-        location: "",
-        description: "",
-      });
+      await loadReports();
     } catch (error) {
-      setReportError(
-        error.message || "Could not submit the report. Please try again."
-      );
+      setReportError(error.message);
     } finally {
       setReportLoading(false);
     }
   }
 
-  function openReport() {
-    setReport((previous) => ({
-      ...previous,
-      code: code.trim(),
-      productName:
-        result?.type !== "notfound" && result?.type !== "error"
-          ? result?.name || ""
-          : "",
-    }));
+  // Edit report
+  function editReport(item) {
+    if (item.report_status !== "pending") return;
 
+    setEditingId(item.report_id);
+    setReport(parseReport(item));
     setReportMessage("");
     setReportError("");
-    setShowReport(true);
+
+    document
+      .getElementById("report-form")
+      ?.scrollIntoView({ behavior: "smooth" });
   }
 
-  const resultIsRegistered = result?.type === "registered";
-  const resultWasUsed = result?.type === "already_verified";
-  const resultIsError = result?.type === "error";
+  // Cancel editing
+  function cancelEdit() {
+    setEditingId(null);
+    setReport(emptyReport);
+    setReportError("");
+    setReportMessage("");
+  }
+
+  // Delete report
+  async function deleteReport(reportId) {
+    const confirmed = window.confirm(
+      "Are you sure you want to delete this report?"
+    );
+
+    if (!confirmed) return;
+
+    setActionLoading(true);
+    setReportsError("");
+
+    try {
+      const data = await apiRequest(
+        `/customer/reports/${reportId}`,
+        { method: "DELETE" }
+      );
+
+      if (editingId === reportId) {
+        cancelEdit();
+      }
+
+      setReportMessage(
+        data.message || "Report deleted successfully."
+      );
+
+      await loadReports();
+    } catch (error) {
+      setReportsError(error.message);
+    } finally {
+      setActionLoading(false);
+    }
+  }
+
+  const pendingCount = reports.filter(
+    (item) => item.report_status === "pending"
+  ).length;
+
+  const resolvedCount = reports.filter(
+    (item) => item.report_status === "resolved"
+  ).length;
 
   return (
-    <div className="mx-auto max-w-6xl space-y-7">
+    <motion.div
+      initial="hidden"
+      animate="visible"
+      variants={staggerContainer}
+      className="mx-auto max-w-6xl space-y-6 rounded-[2rem] bg-[#f3f5ee] p-3 sm:space-y-7 sm:p-5 md:p-7"
+    >
+      {/* HERO */}
+      <motion.section
+        variants={fadeUp}
+        className="relative isolate overflow-hidden rounded-[1.8rem] bg-gradient-to-br from-[#294535] via-[#345b42] to-[#49694d] p-6 text-white shadow-[0_15px_40px_rgba(41,69,53,0.16)] sm:p-8 md:p-10"
+      >
+        <motion.div
+          aria-hidden="true"
+          animate={{ rotate: 360 }}
+          transition={{
+            duration: 55,
+            repeat: Infinity,
+            ease: "linear",
+          }}
+          className="pointer-events-none absolute -right-20 -top-24 h-72 w-72 rounded-full border border-white/10"
+        />
 
-      {/* Hero Section */}
-      <section className="relative overflow-hidden rounded-3xl bg-[#294535] p-7 text-white shadow-sm md:p-10">
-        <div className="pointer-events-none absolute -right-12 -top-16 h-64 w-64 rounded-full border border-white/10" />
-        <div className="pointer-events-none absolute -right-2 -top-6 h-44 w-44 rounded-full border border-white/10" />
+        <motion.div
+          aria-hidden="true"
+          animate={{ y: [0, 12, 0], x: [0, -8, 0] }}
+          transition={{
+            duration: 7,
+            repeat: Infinity,
+            ease: "easeInOut",
+          }}
+          className="pointer-events-none absolute -right-4 top-8 h-40 w-40 rounded-full border border-white/10 bg-white/[0.025]"
+        />
 
-        <div className="relative">
-          <p className="text-xs font-semibold tracking-[0.2em] text-[#d3e2d1]">
+        <div className="relative z-10 max-w-2xl">
+          <div className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-3 py-1.5 text-[10px] font-semibold tracking-[0.17em] text-[#dce9d6]">
+            <ShieldCheck size={14} />
             VERIFY PRODUCT AUTHENTICITY
-          </p>
+          </div>
 
-          <h1 className="mt-3 text-3xl font-bold leading-tight md:text-5xl">
+          <h1 className="mt-5 text-3xl font-bold leading-tight tracking-tight sm:text-4xl md:text-5xl">
             Buy with confidence.
-            <span className="block text-[#c9dfbf]">
+            <span className="mt-1 block text-[#c9dfbf]">
               Check before you trust.
             </span>
           </h1>
 
-          <p className="mt-4 max-w-xl text-sm leading-7 text-[#e0e9df] md:text-base">
-            Check whether your product code matches a record registered
-            with the brand in our verification registry.
+          <p className="mt-4 max-w-xl text-sm leading-7 text-[#e0e9df] sm:text-base">
+            Verify your product and submit an issue report whenever
+            you need assistance from the brand.
           </p>
-        </div>
-      </section>
 
-      {/* Product Verification */}
-      <section
-        id="verify-product"
-        className="scroll-mt-6 rounded-3xl border border-[#e2e6dc] bg-white p-6 md:p-8"
-      >
-        <div className="flex items-start gap-4">
-          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-[#e9f0e4] text-[#345b42]">
-            <ScanLine size={24} />
-          </div>
+          <div className="mt-6 flex flex-wrap gap-3">
+            <button
+              type="button"
+              onClick={() =>
+                document
+                  .getElementById("verify-product")
+                  ?.scrollIntoView({ behavior: "smooth" })
+              }
+              className="inline-flex items-center gap-2 rounded-xl bg-[#e4eedc] px-4 py-3 text-xs font-bold text-[#294535] shadow-sm transition duration-200 hover:-translate-y-0.5 hover:bg-white"
+            >
+              <ScanLine size={16} />
+              Verify Product
+            </button>
 
-          <div>
-            <h2 className="text-xl font-bold text-[#294535]">
-              Verify Your Product
-            </h2>
-            <p className="mt-1 text-sm leading-6 text-gray-500">
-              Enter the unique scratch code printed on the product packaging.
-            </p>
+            <button
+              type="button"
+              onClick={() =>
+                document
+                  .getElementById("my-reports")
+                  ?.scrollIntoView({ behavior: "smooth" })
+              }
+              className="inline-flex items-center gap-2 rounded-xl border border-white/25 bg-white/10 px-4 py-3 text-xs font-semibold text-white transition duration-200 hover:-translate-y-0.5 hover:bg-white/15"
+            >
+              <ClipboardList size={16} />
+              My Reports
+            </button>
           </div>
         </div>
+      </motion.section>
+
+      {/* VERIFICATION */}
+      <PageSection id="verify-product">
+        <SectionHeading
+          icon={ScanLine}
+          title="Verify Your Product"
+          description="Enter the unique scratch code printed on the packaging."
+        />
 
         <form
           onSubmit={verifyProduct}
@@ -348,7 +503,7 @@ export default function CustomerPortal() {
           <div className="relative min-w-0 flex-1">
             <Search
               size={19}
-              className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400"
+              className="absolute left-4 top-1/2 -translate-y-1/2 text-[#98a394]"
             />
 
             <input
@@ -356,412 +511,332 @@ export default function CustomerPortal() {
               onChange={(e) => {
                 setCode(e.target.value);
                 setResult(null);
-                setShowReport(false);
-                setReportMessage("");
-                setReportError("");
               }}
               placeholder="Enter product scratch code..."
               aria-label="Product verification code"
-              className="w-full rounded-xl border border-gray-200 bg-[#fcfcf9] py-3.5 pl-11 pr-4 text-sm outline-none transition focus:border-[#71947a] focus:ring-2 focus:ring-[#71947a]/10"
+              className="w-full rounded-xl border border-[#e3e8df] bg-[#fbfcf8] py-3.5 pl-11 pr-4 text-sm text-[#344638] outline-none transition placeholder:text-[#a5ada2] hover:border-[#c8d6c4] focus:border-[#71947a] focus:bg-white focus:ring-4 focus:ring-[#71947a]/10"
             />
           </div>
 
           <button
             type="submit"
             disabled={verifyLoading}
-            className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#345b42] px-6 py-3.5 text-sm font-semibold text-white transition hover:bg-[#294535] disabled:cursor-not-allowed disabled:opacity-60"
+            className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#345b42] px-6 py-3.5 text-sm font-semibold text-white shadow-sm transition duration-200 hover:-translate-y-0.5 hover:bg-[#294535] hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60"
           >
             <ShieldCheck size={18} />
             {verifyLoading ? "Checking..." : "Verify Code"}
           </button>
         </form>
 
-        {result && (
-          <div
-            className={`mt-6 rounded-2xl border p-5 ${
-              resultIsRegistered
-                ? "border-[#c8dfc9] bg-[#f0f7ef]"
-                : resultWasUsed || resultIsError
-                  ? "border-red-200 bg-red-50"
-                  : "border-orange-200 bg-orange-50"
-            }`}
-          >
-            <div className="flex items-start gap-3">
-              {resultIsRegistered ? (
-                <PackageCheck
-                  size={28}
-                  className="mt-0.5 shrink-0 text-[#345b42]"
-                />
-              ) : (
-                <AlertTriangle
-                  size={28}
-                  className={`mt-0.5 shrink-0 ${
-                    resultWasUsed || resultIsError
-                      ? "text-red-700"
-                      : "text-orange-700"
-                  }`}
-                />
-              )}
+        {result && <VerificationResultCard result={result} />}
+      </PageSection>
 
-              <div className="min-w-0 flex-1">
-                <h3
-                  className={`font-bold ${
-                    resultIsRegistered
-                      ? "text-[#345b42]"
-                      : resultWasUsed || resultIsError
-                        ? "text-red-800"
-                        : "text-orange-800"
-                  }`}
-                >
-                  {resultIsRegistered
-                    ? "Product Registered with Brand"
-                    : resultWasUsed
-                      ? "Code Already Used"
-                      : resultIsError
-                        ? "Verification Error"
-                        : "Product Could Not Be Verified"}
-                </h3>
+      {/* REPORT FORM */}
+      <PageSection id="report-form">
+        <SectionHeading
+          icon={FileWarning}
+          title={editingId ? "Edit Your Report" : "Report a Product Issue"}
+          description="Submit a report for any product-related concern, whether your product is verified or not."
+        />
 
-                <p className="mt-1 text-sm leading-6 text-gray-600">
-                  {result.message}
-                </p>
-              </div>
+        <form onSubmit={submitReport} className="mt-6 space-y-5">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <FormField
+              label="Product Name"
+              value={report.productName}
+              onChange={(e) =>
+                setReport({
+                  ...report,
+                  productName: e.target.value,
+                })
+              }
+              placeholder="Name printed on product"
+            />
+
+            <FormField
+              label="Product / Scratch Code"
+              value={report.code}
+              onChange={(e) =>
+                setReport({
+                  ...report,
+                  code: e.target.value,
+                })
+              }
+              placeholder="Enter code"
+              optional
+            />
+
+            <FormField
+              label="Seller or Shop"
+              value={report.seller}
+              onChange={(e) =>
+                setReport({
+                  ...report,
+                  seller: e.target.value,
+                })
+              }
+              placeholder="Shop or seller name"
+              optional
+            />
+
+            <FormField
+              label="Purchase Location"
+              value={report.location}
+              onChange={(e) =>
+                setReport({
+                  ...report,
+                  location: e.target.value,
+                })
+              }
+              placeholder="City or shop location"
+              optional
+            />
+          </div>
+
+          <TextareaField
+            label="Complaint Details"
+            rows={4}
+            value={report.description}
+            onChange={(e) =>
+              setReport({
+                ...report,
+                description: e.target.value,
+              })
+            }
+            placeholder="Describe your product issue or concern..."
+          />
+
+          <div className="flex items-start gap-3 rounded-xl border border-[#e2e8d9] bg-[#f4f7ef] p-4">
+            <ShieldCheck
+              size={19}
+              className="mt-0.5 shrink-0 text-[#54734e]"
+            />
+
+            <p className="text-xs leading-6 text-[#697766]">
+              Your report will be saved in the VerifyChain database.
+              The administrator can review it and update its status
+              to Resolved.
+            </p>
+          </div>
+
+          {reportMessage && (
+            <motion.div
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="flex items-start gap-2 rounded-xl border border-[#cbdcc5] bg-[#f0f7ed] p-4 text-sm text-[#345b42]"
+            >
+              <CheckCircle2 size={18} className="mt-0.5 shrink-0" />
+              {reportMessage}
+            </motion.div>
+          )}
+
+          {reportError && (
+            <div className="rounded-xl border border-[#efd3cb] bg-[#fff4f0] p-4 text-sm text-[#a45c4b]">
+              {reportError}
             </div>
+          )}
 
-            <div className="mt-5 grid gap-4 border-t border-black/10 pt-4 sm:grid-cols-3">
-              <div>
-                <p className="text-xs text-gray-500">Product Name</p>
-                <p className="mt-1 break-words text-sm font-semibold text-[#294535]">
-                  {result.name}
-                </p>
-              </div>
+          <div className="flex flex-wrap gap-3">
+            <button
+              type="submit"
+              disabled={reportLoading}
+              className="inline-flex items-center gap-2 rounded-xl bg-[#345b42] px-5 py-3 text-sm font-semibold text-white shadow-sm transition duration-200 hover:-translate-y-0.5 hover:bg-[#294535] hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <Send size={16} />
+              {reportLoading
+                ? "Please wait..."
+                : editingId
+                  ? "Update Report"
+                  : "Submit Report"}
+            </button>
 
-              <div>
-                <p className="text-xs text-gray-500">Batch Number</p>
-                <p className="mt-1 text-sm font-semibold text-[#294535]">
-                  {result.batch}
-                </p>
-              </div>
-
-              <div>
-                <p className="text-xs text-gray-500">Entered Code</p>
-                <p className="mt-1 break-all text-sm font-semibold text-[#294535]">
-                  {result.productCode || code.trim()}
-                </p>
-              </div>
-            </div>
-
-            {resultIsRegistered ? (
-              <div className="mt-5 flex items-start gap-2 rounded-xl bg-white/70 p-3 text-xs leading-5 text-[#345b42]">
-                <ShieldCheck size={17} className="mt-0.5 shrink-0" />
-                The code matched a registered record and was verified for
-                the first time. 
-              </div>
-            ) : !resultIsError ? (
+            {editingId ? (
               <button
-                onClick={openReport}
-                className="mt-5 inline-flex items-center justify-center gap-2 rounded-xl bg-[#345b42] px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#294535]"
+                type="button"
+                onClick={cancelEdit}
+                className="inline-flex items-center gap-2 rounded-xl border border-[#dfe6dc] bg-white px-5 py-3 text-sm font-semibold text-[#667363] transition hover:bg-[#f4f6f1]"
               >
-                <FileWarning size={18} />
-                Report a Fake Product
+                <X size={16} />
+                Cancel Editing
               </button>
-            ) : null}
-          </div>
-        )}
-
-        {reportMessage && (
-          <div className="mt-5 flex items-start gap-2 rounded-xl border border-[#c8dfc9] bg-[#f0f7ef] p-4 text-sm leading-6 text-[#345b42]">
-            <CheckCircle2 size={19} className="mt-0.5 shrink-0" />
-            {reportMessage}
-          </div>
-        )}
-
-        {reportError && !showReport && (
-          <div className="mt-5 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">
-            {reportError}
-          </div>
-        )}
-      </section>
-
-      {/* Report Form */}
-      {showReport && (
-        <section className="rounded-3xl border border-orange-200 bg-white p-6 md:p-8">
-          <div className="flex items-start gap-3">
-            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-orange-50 text-orange-700">
-              <FileWarning size={23} />
-            </div>
-
-            <div>
-              <h2 className="text-xl font-bold text-[#294535]">
-                Report a Fake Product
-              </h2>
-              <p className="mt-1 text-sm leading-6 text-gray-500">
-                Share the details so the brand can review the product.
-              </p>
-            </div>
-          </div>
-
-          <form onSubmit={submitReport} className="mt-6 space-y-4">
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div>
-                <label className="mb-1.5 block text-sm font-medium text-gray-700">
-                  Product Name
-                </label>
-                <input
-                  value={report.productName}
-                  onChange={(e) =>
-                    setReport({ ...report, productName: e.target.value })
-                  }
-                  placeholder="Name printed on product"
-                  className="w-full rounded-xl border border-gray-200 px-4 py-3 outline-none focus:border-[#71947a]"
-                />
-              </div>
-
-              <div>
-                <label className="mb-1.5 block text-sm font-medium text-gray-700">
-                  Product / Scratch Code *
-                </label>
-                <input
-                  required
-                  value={report.code}
-                  onChange={(e) =>
-                    setReport({ ...report, code: e.target.value })
-                  }
-                  placeholder="Product code"
-                  className="w-full rounded-xl border border-gray-200 px-4 py-3 outline-none focus:border-[#71947a]"
-                />
-              </div>
-
-              <div>
-                <label className="mb-1.5 block text-sm font-medium text-gray-700">
-                  Seller or Shop
-                </label>
-                <input
-                  value={report.seller}
-                  onChange={(e) =>
-                    setReport({ ...report, seller: e.target.value })
-                  }
-                  placeholder="Shop or seller name"
-                  className="w-full rounded-xl border border-gray-200 px-4 py-3 outline-none focus:border-[#71947a]"
-                />
-              </div>
-
-              <div>
-                <label className="mb-1.5 block text-sm font-medium text-gray-700">
-                  Purchase Location
-                </label>
-                <input
-                  value={report.location}
-                  onChange={(e) =>
-                    setReport({ ...report, location: e.target.value })
-                  }
-                  placeholder="City or shop location"
-                  className="w-full rounded-xl border border-gray-200 px-4 py-3 outline-none focus:border-[#71947a]"
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="mb-1.5 block text-sm font-medium text-gray-700">
-                Additional Details
-              </label>
-              <textarea
-                rows={4}
-                value={report.description}
-                onChange={(e) =>
-                  setReport({ ...report, description: e.target.value })
-                }
-                placeholder="Why do you think this product may be fake?"
-                className="w-full resize-y rounded-xl border border-gray-200 px-4 py-3 outline-none focus:border-[#71947a]"
-              />
-            </div>
-
-            <div className="rounded-xl bg-[#f5f4ed] p-4 text-xs leading-5 text-gray-600">
-              Your report will be saved in the VerifyChain database for
-              authorized administrators to review. This does not automatically
-              notify the brand.
-            </div>
-
-            {reportError && (
-              <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">
-                {reportError}
-              </div>
-            )}
-
-            <div className="flex flex-wrap gap-3">
-              <button
-                type="submit"
-                disabled={reportLoading}
-                className="inline-flex items-center gap-2 rounded-xl bg-[#345b42] px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#294535] disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                <Send size={17} />
-                {reportLoading ? "Submitting..." : "Submit Report"}
-              </button>
-
+            ) : (
               <button
                 type="button"
                 onClick={() => {
-                  setShowReport(false);
+                  setReport(emptyReport);
+                  setReportMessage("");
                   setReportError("");
                 }}
-                className="rounded-xl border border-gray-200 px-5 py-3 text-sm font-semibold text-gray-600 hover:bg-gray-50"
+                className="rounded-xl border border-[#dfe6dc] bg-white px-5 py-3 text-sm font-semibold text-[#667363] transition hover:bg-[#f4f6f1]"
               >
-                Cancel
+                Clear Form
               </button>
-            </div>
-          </form>
-        </section>
-      )}
-
-      {/* How It Works */}
-      <section className="grid gap-4 md:grid-cols-3">
-        <div className="rounded-2xl border border-[#e2e6dc] bg-white p-5">
-          <ScanLine size={23} className="text-[#345b42]" />
-          <h3 className="mt-4 font-bold text-[#294535]">1. Scan or Enter</h3>
-          <p className="mt-2 text-sm leading-6 text-gray-500">
-            Use the scratch code printed on the packaging.
-          </p>
-        </div>
-
-        <div className="rounded-2xl border border-[#e2e6dc] bg-white p-5">
-          <Search size={23} className="text-[#345b42]" />
-          <h3 className="mt-4 font-bold text-[#294535]">2. Match the Record</h3>
-          <p className="mt-2 text-sm leading-6 text-gray-500">
-            Check whether the code exists in the brand&apos;s registry and
-            whether it has already been used.
-          </p>
-        </div>
-
-        <div className="rounded-2xl border border-[#e2e6dc] bg-white p-5">
-          <ShieldCheck size={23} className="text-[#345b42]" />
-          <h3 className="mt-4 font-bold text-[#294535]">
-            3. Review or Report
-          </h3>
-          <p className="mt-2 text-sm leading-6 text-gray-500">
-            Review the registration result or submit a report for
-            administrator review.
-          </p>
-        </div>
-      </section>
-
-      {/* Verification History */}
-      <section className="rounded-3xl border border-[#e2e6dc] bg-white p-6 md:p-8">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <History size={23} className="text-[#345b42]" />
-            <div>
-              <h2 className="text-lg font-bold text-[#294535]">
-                Recent Verifications
-              </h2>
-              <p className="text-xs text-gray-500">
-                Your latest checks saved in the database
-              </p>
-            </div>
+            )}
           </div>
+        </form>
+      </PageSection>
 
-          <button
-            onClick={loadHistory}
-            disabled={historyLoading}
-            className="rounded-lg px-3 py-2 text-xs font-medium text-gray-500 hover:bg-gray-100 disabled:opacity-50"
+      {/* MY REPORTS */}
+      <PageSection id="my-reports">
+        <SectionHeading
+          icon={ClipboardList}
+          title="My Reports"
+          description="View and manage your submitted reports."
+          action={
+            <button
+              type="button"
+              onClick={loadReports}
+              disabled={reportsLoading}
+              className="inline-flex items-center gap-2 rounded-xl border border-[#e0e7dc] bg-[#f8faf5] px-3.5 py-2.5 text-xs font-semibold text-[#587052] transition hover:bg-[#edf3e8] disabled:opacity-50"
+            >
+              <RefreshCw
+                size={14}
+                className={reportsLoading ? "animate-spin" : ""}
+              />
+              Refresh
+            </button>
+          }
+        />
+
+        {/* REPORT COUNTS */}
+        <motion.div
+          variants={staggerContainer}
+          initial="hidden"
+          whileInView="visible"
+          viewport={{ once: true }}
+          className="mt-6 grid grid-cols-2 gap-4"
+        >
+          <StatCard
+            title="Pending Reports"
+            count={pendingCount}
+            type="pending"
+          />
+
+          <StatCard
+            title="Resolved Reports"
+            count={resolvedCount}
+            type="resolved"
+          />
+        </motion.div>
+
+        {reportsError && (
+          <div className="mt-5 rounded-xl border border-[#efd3cb] bg-[#fff4f0] p-4 text-sm text-[#a45c4b]">
+            {reportsError}
+          </div>
+        )}
+
+        {reportsLoading ? (
+          <div className="py-12 text-center">
+            <RefreshCw
+              size={22}
+              className="mx-auto animate-spin text-[#789174]"
+            />
+            <p className="mt-3 text-sm text-[#899387]">
+              Loading your reports...
+            </p>
+          </div>
+        ) : reports.length === 0 ? (
+          <div className="mt-6">
+            <EmptyState
+              icon={ClipboardList}
+              title="No reports submitted yet"
+              description="Your submitted product reports will appear here."
+            />
+          </div>
+        ) : (
+          <motion.div
+            variants={staggerContainer}
+            initial="hidden"
+            animate="visible"
+            className="mt-6 space-y-4"
           >
-            {historyLoading ? "Refreshing..." : "Refresh"}
-          </button>
-        </div>
+            {reports.map((item) => (
+              <ReportCard
+                key={item.report_id}
+                item={item}
+                parsed={parseReport(item)}
+                formatDate={formatDate}
+                onEdit={() => editReport(item)}
+                onDelete={() => deleteReport(item.report_id)}
+                actionLoading={actionLoading}
+              />
+            ))}
+          </motion.div>
+        )}
+      </PageSection>
+
+      {/* HOW IT WORKS */}
+      <motion.div
+        variants={staggerContainer}
+        initial="hidden"
+        whileInView="visible"
+        viewport={{ once: true }}
+      >
+        <HowItWorks />
+      </motion.div>
+
+      {/* VERIFICATION HISTORY */}
+      <PageSection>
+        <SectionHeading
+          icon={History}
+          title="Recent Verifications"
+          description="Your latest checks saved in the database."
+          action={
+            <button
+              type="button"
+              onClick={loadHistory}
+              disabled={historyLoading}
+              className="inline-flex items-center gap-2 rounded-xl border border-[#e0e7dc] bg-[#f8faf5] px-3.5 py-2.5 text-xs font-semibold text-[#587052] transition hover:bg-[#edf3e8] disabled:opacity-50"
+            >
+              <RefreshCw
+                size={14}
+                className={historyLoading ? "animate-spin" : ""}
+              />
+              Refresh
+            </button>
+          }
+        />
 
         {historyError && (
-          <div className="mt-5 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">
+          <div className="mt-5 rounded-xl border border-[#efd3cb] bg-[#fff4f0] p-4 text-sm text-[#a45c4b]">
             {historyError}
           </div>
         )}
 
         {historyLoading ? (
-          <div className="py-10 text-center text-sm text-gray-500">
-            Loading verification history...
+          <div className="py-10 text-center">
+            <RefreshCw
+              size={21}
+              className="mx-auto animate-spin text-[#789174]"
+            />
+            <p className="mt-3 text-sm text-[#899387]">
+              Loading verification history...
+            </p>
           </div>
         ) : history.length === 0 ? (
-          <div className="py-10 text-center">
-            <History size={30} className="mx-auto text-gray-300" />
-            <p className="mt-3 font-medium text-gray-600">
-              No verification history yet
-            </p>
-            <p className="mt-1 text-sm text-gray-400">
-              Your database verification records will appear here.
-            </p>
+          <div className="mt-5">
+            <EmptyState
+              icon={History}
+              title="No verification history yet"
+              description="Your verification records will appear here."
+            />
           </div>
         ) : (
-          <div className="mt-5 space-y-3">
+          <motion.div
+            variants={staggerContainer}
+            initial="hidden"
+            animate="visible"
+            className="mt-5 space-y-3"
+          >
             {history.slice(0, 10).map((item) => (
-              <div
-                key={item.id}
-                className="flex flex-col justify-between gap-3 rounded-2xl border border-[#edf0e8] p-4 sm:flex-row sm:items-center"
-              >
-                <div className="flex min-w-0 items-start gap-3">
-                  {item.type === "registered" ? (
-                    <PackageCheck
-                      size={21}
-                      className="mt-1 shrink-0 text-[#345b42]"
-                    />
-                  ) : (
-                    <AlertTriangle
-                      size={21}
-                      className="mt-1 shrink-0 text-orange-700"
-                    />
-                  )}
-
-                  <div className="min-w-0">
-                    <p className="break-words font-semibold text-[#294535]">
-                      {item.name}
-                    </p>
-                    <p className="mt-1 break-all text-xs text-gray-500">
-                      Code: {item.code}
-                    </p>
-                    {item.batch !== "Not available" && (
-                      <p className="mt-1 text-xs text-gray-500">
-                        Batch: {item.batch}
-                      </p>
-                    )}
-                    <p className="mt-1 text-xs text-gray-400">
-                      {item.checkedAt}
-                    </p>
-                  </div>
-                </div>
-
-                <span
-                  className={`self-start rounded-full px-3 py-1.5 text-xs font-semibold ${
-                    item.type === "registered"
-                      ? "bg-[#e9f0e4] text-[#345b42]"
-                      : item.type === "already_verified"
-                        ? "bg-red-50 text-red-800"
-                        : "bg-orange-50 text-orange-800"
-                  }`}
-                >
-                  {item.type === "registered"
-                    ? "First Verified"
-                    : item.type === "already_verified"
-                      ? "Previously Used"
-                      : "Not Verified"}
-                </span>
-              </div>
+              <HistoryItem key={item.id} item={item} />
             ))}
-          </div>
+          </motion.div>
         )}
-      </section>
+      </PageSection>
 
-      {/* Information Note */}
-      <section className="flex items-start gap-3 rounded-2xl border border-[#e5e6d9] bg-[#f0f0e6] p-5">
-        <Info size={20} className="mt-0.5 shrink-0 text-[#61744e]" />
-        <div>
-          <h3 className="text-sm font-bold text-[#294535]">
-            Verification and reports
-          </h3>
-          <p className="mt-1 text-xs leading-6 text-gray-600">
-            A matching code confirms a registry match, not necessarily the
-            physical item&apos;s authenticity. VerifyChain records verification
-            attempts and saves customer reports in the database for
-            administrator review.
-          </p>
-        </div>
-      </section>
-    </div>
+      {/* INFORMATION */}
+      <InfoNote />
+    </motion.div>
   );
 }
